@@ -1,6 +1,9 @@
 ﻿
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Net.Http;
+using System.Threading.Tasks;
 
 namespace SharpNao
 {
@@ -12,13 +15,13 @@ namespace SharpNao
         public enum SourceRating
         {
             /// <summary>The image explicitness rating could not be determained.</summary>
-            UNKNOWN = 0,
+            Unknown = 0,
             /// <summary>The image explicitness rating was determained to be safe, and contains no nudity.</summary>
-            SAFE = 1,
+            Safe = 1,
             /// <summary>The image explicitness rating was determained to be questionable, and could contain nudity.</summary>
-            QUESTIONABLE = 2,
+            Questionable = 2,
             /// <summary>The image explicitness rating was determained to be NSFW, and contains nudity.</summary>
-            NSFW = 3
+            Nsfw = 3
         }
 
         /// <summary>
@@ -26,9 +29,48 @@ namespace SharpNao
         /// </summary>
         public enum OutputType
         {
+            // NOT SUPPORTED
             Normal = 0,
+            // NOT SUPPORTED
             XML = 1,
-            JSON = 2
+            // Only one that works at the moment
+            Json = 2
+        }
+
+        [Flags]
+        public enum DbMaskIndex : long
+        {
+            AllDatabases = 0,
+            HMagazines = 1,
+            HGameCG = 2,
+            DoujinshiDb = 4,
+            Pixiv = 8,
+            NicoNicoSeiga = 16,
+            Danbooru = 32,
+            Drawr = 64,
+            Nijie = 128,
+            Yandere = 256,
+            Shutterstock = 512,
+            FAKKU = 1024,
+            HMisc = 2048,
+            TwoDMarket = 4096,
+            MediBang = 8192,
+            Anime = 16384,
+            HAnime = 32768,
+            Movies = 65536,
+            Shows = 131072,
+            Gelbooru = 262144,
+            Konachan = 524288,
+            AnimePictureNet = 1048576,
+            e621Net = 2097152,
+            IdolComplex = 4194304,
+            BcyNetIllust = 8388608,
+            BcyNetCosplay = 16777216,
+            PortalGraphicsNet = 33554432,
+            DeviantArt = 67108864,
+            PawooNet = 134217728,
+            Madokami = 536870912,
+            MangaDex = 1073741824
         }
 
         public class RateLimiter
@@ -86,13 +128,46 @@ namespace SharpNao
 
         public class SauceResult
         {
+            /// <summary>
+            /// The url where the source is from
+            /// </summary>
+            public string Url { get; }
 
+            /// <summary>
+            /// The name of the site that the original source is from
+            /// </summary>
+            public string Site { get; }
+
+            /// <summary>
+            /// 
+            /// </summary>
+            public int Index { get; }
+
+            /// <summary>
+            /// How similar is the image to the one provided (Percentage)?
+            /// </summary>
+            public float Similarity { get; }
+
+            /// <summary>
+            /// A link to the thumbnail of the image
+            /// </summary>
+            public string Thumbnail { get; }
+
+            /// <summary>
+            /// How explicit is the image?
+            /// </summary>
+            public SourceRating Rating { get; }
         }
+
+        /// <summary>
+        /// The default Api Url. Can be changed in case it ever moves.
+        /// </summary>
+        public string ApiUrl => "https://saucenao.com/search.php";
 
         /// <summary>
         /// The key used the connect to your account on SauceNao. 
         /// </summary>
-        private string _apiKey { get; }
+        private string ApiKey { get; }
 
         /// <summary>
         /// The amount of results that will be fetched by default. This can be overridden per search. Default 6.
@@ -121,12 +196,12 @@ namespace SharpNao
         /// <summary>
         /// A bit mask for ENABLING specific indexes
         /// </summary>
-        public List<uint> DatabaseMasks { get; } = new List<uint>();
+        public DbMaskIndex DatabaseMask { get; set; }
 
         /// <summary>
         /// A bit mask for DISABLING specific indexes
         /// </summary>
-        public List<uint> DatabaseMasksInverted { get; } = new List<uint>();
+        public DbMaskIndex DatabaseMaskInverted { get; set; }
 
         /// <summary>
         /// When true, only a single result will ever be returned.
@@ -154,19 +229,54 @@ namespace SharpNao
         /// </summary>
         public bool IgnoreRatelimits { get; set; }
 
+        /// <summary>
+        /// An array of the allowed file types. We check against these before sending the request.
+        /// </summary>
+        private string[] AllowedFileTypes { get; } = new[] {".jpg", ".jpeg", ".gif", ".bmp", ".png"};
+
         /// <summary></summary>
         /// <param name="apiKey">Your SauceNao Api Key</param>
         public SharpNao(string apiKey)
         {
-            _apiKey = apiKey;
+            ApiKey = apiKey;
             DefaultResultCount = 6;
-            DefaultResponseType = OutputType.JSON;
+            DefaultResponseType = OutputType.Json;
             TestMode = false;
 
             ReturnRatings = true;
             PreventExplicitResults = false;
             TreatUnknownAsQuestionable = true;
             IgnoreRatelimits = false;
+        }
+
+        public async Task<KeyValuePair<string, SauceResult>> GetResultAsync(string sauceUrl, int results = 0)
+        {
+            if(!(Uri.TryCreate(sauceUrl, UriKind.Absolute, out Uri uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)))
+                return new KeyValuePair<string, SauceResult>("Url supplied was not valid.", null);
+
+            if (results == 0)
+                results = DefaultResultCount;
+
+            Dictionary<string, string> postData = new Dictionary<string, string>()
+            {
+                { "api_key", this.ApiKey },
+                { "output_type", this.DefaultResponseType.ToString() },
+                { "numres", results.ToString() },
+                { "testmode", this.TestMode ? "1" : "0" },
+                { "url", sauceUrl }
+            };
+
+            HttpClient client = new HttpClient();
+            FormUrlEncodedContent data = new FormUrlEncodedContent(postData);
+            HttpResponseMessage res = await client.PostAsync(this.ApiUrl, data);
+            Stream json = await res.Content.ReadAsStreamAsync();
+
+            using (StreamReader reader = new StreamReader(json))
+            {
+                Console.WriteLine(reader.ReadToEnd());
+            }
+
+            return new KeyValuePair<string, SauceResult>();
         }
     }
 }
