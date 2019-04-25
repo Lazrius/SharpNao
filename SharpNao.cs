@@ -2,10 +2,15 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
+using System.Runtime.Serialization;
 using System.Threading.Tasks;
+using System.Json;
+using System.Text;
+using System.Runtime.Serialization.Json;
 
-namespace SharpNao
+namespace SauceNaoWrapper
 {
     public class SharpNao
     {
@@ -126,43 +131,44 @@ namespace SharpNao
             }
         }
 
+        [DataContract]
         public class SauceResult
         {
             /// <summary>
-            /// The url where the source is from
+            /// The url(s) where the source is from. Multiple will be returned if the exact same image is found in multiple places
             /// </summary>
-            public string Url { get; }
+            [DataMember(Name = "ext_urls")]
+            public string[] Url { get; }
 
             /// <summary>
-            /// The name of the site that the original source is from
+            /// The search index of the image
             /// </summary>
-            public string Site { get; }
-
-            /// <summary>
-            /// 
-            /// </summary>
+            [DataMember(Name = "index_id")]
             public int Index { get; }
 
             /// <summary>
             /// How similar is the image to the one provided (Percentage)?
             /// </summary>
+            [DataMember(Name = "similarity")]
             public float Similarity { get; }
 
             /// <summary>
             /// A link to the thumbnail of the image
             /// </summary>
+            [DataMember(Name = "thumbnail")]
             public string Thumbnail { get; }
 
             /// <summary>
             /// How explicit is the image?
             /// </summary>
+            [IgnoreDataMember]
             public SourceRating Rating { get; }
         }
 
         /// <summary>
         /// The default Api Url. Can be changed in case it ever moves.
         /// </summary>
-        public string ApiUrl => "https://saucenao.com/search.php";
+        public string ApiUrl { get; set; } = "https://saucenao.com/search.php";
 
         /// <summary>
         /// The key used the connect to your account on SauceNao. 
@@ -249,34 +255,62 @@ namespace SharpNao
             IgnoreRatelimits = false;
         }
 
-        public async Task<KeyValuePair<string, SauceResult>> GetResultAsync(string sauceUrl, int results = 0)
+        public async Task<KeyValuePair<string, List<SauceResult>>> GetResultAsync(string sauceUrl, int results = 0)
         {
             if(!(Uri.TryCreate(sauceUrl, UriKind.Absolute, out Uri uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)))
-                return new KeyValuePair<string, SauceResult>("Url supplied was not valid.", null);
+                return new KeyValuePair<string, List<SauceResult>>("Url supplied was not valid.", new List<SauceResult>());
+
+            if (!AllowedFileTypes.Any(x => x == Path.GetExtension(sauceUrl)))
+                return new KeyValuePair<string, List<SauceResult>>("File provided was not of a valid format.", new List<SauceResult>());
 
             if (results == 0)
                 results = DefaultResultCount;
 
-            Dictionary<string, string> postData = new Dictionary<string, string>()
+            using (HttpClient client = new HttpClient())
             {
-                { "api_key", this.ApiKey },
-                { "output_type", this.DefaultResponseType.ToString() },
-                { "numres", results.ToString() },
-                { "testmode", this.TestMode ? "1" : "0" },
-                { "url", sauceUrl }
-            };
+                HttpResponseMessage response = await client.PostAsync(ApiUrl, new MultipartFormDataContent
+                {
+                    { new StringContent(this.ApiKey), "api_key" },
+                    { new StringContent(((int)this.DefaultResponseType).ToString()), "output_type" },
+                    { new StringContent(results.ToString()), "numres" },
+                    { new StringContent(this.TestMode ? "1" : "0"), "testmode" },
+                    { new StringContent(sauceUrl), "url" },
+                });
 
-            HttpClient client = new HttpClient();
-            FormUrlEncodedContent data = new FormUrlEncodedContent(postData);
-            HttpResponseMessage res = await client.PostAsync(this.ApiUrl, data);
-            Stream json = await res.Content.ReadAsStreamAsync();
+                client.Dispose();
 
-            using (StreamReader reader = new StreamReader(json))
-            {
-                Console.WriteLine(reader.ReadToEnd());
+                if (response.StatusCode != System.Net.HttpStatusCode.OK)
+                    return new KeyValuePair<string, List<SauceResult>>("Response was not 200", new List<SauceResult>());
+                // TODO: Actually do proper error handling
+
+                JsonValue jsonString = JsonValue.Parse(await response.Content.ReadAsStringAsync());
+                JsonObject jsonObject = jsonString as JsonObject;
+                JsonValue jsonArray = jsonObject["results"];
+                for (int i = 0; i < jsonArray.Count; i++)
+                {
+                    JsonValue header = jsonArray[i]["header"];
+                    JsonValue data = jsonArray[i]["data"];
+                    string obj = header.ToString();
+                    obj = obj.Remove(obj.Length - 1);
+                    obj += data.ToString().Remove(0, 1).Insert(0, ",");
+                    jsonArray[i] = JsonValue.Parse(obj);
+                }
+
+                string json = jsonArray.ToString();
+                json = json.Insert(json.Length - 1, "}").Insert(0, "{");
+                using (var stream = new MemoryStream(Encoding.Default.GetBytes(json)))
+                {
+                    var serializer = new DataContractJsonSerializer(typeof(SauceResult));
+                    List<SauceResult> result = serializer.ReadObject(stream) as List<SauceResult>;
+                    stream.Dispose();
+                    return new KeyValuePair<string, List<SauceResult>>("Success.", result);
+                }
             }
+        }
 
-            return new KeyValuePair<string, SauceResult>();
+        private static JsonValue GetJsonArray(JsonObject jsonObject)
+        {
+            return JsonArray.Parse(jsonObject["results"]);
         }
     }
 }
