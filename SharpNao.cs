@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Json;
 using System.Text;
 using System.Runtime.Serialization.Json;
+using System.Xml;
 
 namespace SauceNaoWrapper
 {
@@ -40,42 +41,6 @@ namespace SauceNaoWrapper
             XML = 1,
             // Only one that works at the moment
             Json = 2
-        }
-
-        [Flags]
-        public enum DbMaskIndex : long
-        {
-            AllDatabases = 0,
-            HMagazines = 1,
-            HGameCG = 2,
-            DoujinshiDb = 4,
-            Pixiv = 8,
-            NicoNicoSeiga = 16,
-            Danbooru = 32,
-            Drawr = 64,
-            Nijie = 128,
-            Yandere = 256,
-            Shutterstock = 512,
-            FAKKU = 1024,
-            HMisc = 2048,
-            TwoDMarket = 4096,
-            MediBang = 8192,
-            Anime = 16384,
-            HAnime = 32768,
-            Movies = 65536,
-            Shows = 131072,
-            Gelbooru = 262144,
-            Konachan = 524288,
-            AnimePictureNet = 1048576,
-            e621Net = 2097152,
-            IdolComplex = 4194304,
-            BcyNetIllust = 8388608,
-            BcyNetCosplay = 16777216,
-            PortalGraphicsNet = 33554432,
-            DeviantArt = 67108864,
-            PawooNet = 134217728,
-            Madokami = 536870912,
-            MangaDex = 1073741824
         }
 
         public class RateLimiter
@@ -138,31 +103,38 @@ namespace SauceNaoWrapper
             /// The url(s) where the source is from. Multiple will be returned if the exact same image is found in multiple places
             /// </summary>
             [DataMember(Name = "ext_urls")]
-            public string[] Url { get; }
+            public string[] Url { get; internal set; }
 
             /// <summary>
             /// The search index of the image
             /// </summary>
             [DataMember(Name = "index_id")]
-            public int Index { get; }
+            public int Index { get; internal set; }
 
             /// <summary>
             /// How similar is the image to the one provided (Percentage)?
             /// </summary>
             [DataMember(Name = "similarity")]
-            public float Similarity { get; }
+            public float Similarity { get; internal set; }
 
             /// <summary>
             /// A link to the thumbnail of the image
             /// </summary>
             [DataMember(Name = "thumbnail")]
-            public string Thumbnail { get; }
+            public string Thumbnail { get; internal set; }
 
             /// <summary>
             /// How explicit is the image?
             /// </summary>
             [IgnoreDataMember]
-            public SourceRating Rating { get; }
+            public SourceRating Rating { get; internal set; }
+        }
+
+        [DataContract]
+        internal class SauceResultList
+        {
+            [DataMember(Name = "results")]
+            internal SauceResult[] Results { get; set; }
         }
 
         /// <summary>
@@ -198,16 +170,6 @@ namespace SauceNaoWrapper
         /// Long Term Default: 300 searches every 24 hours.
         /// </summary>
         public RateLimiter LongTermRateLimiter { get; set; } = new RateLimiter(300, new TimeSpan(24, 0, 0));
-
-        /// <summary>
-        /// A bit mask for ENABLING specific indexes
-        /// </summary>
-        public DbMaskIndex DatabaseMask { get; set; }
-
-        /// <summary>
-        /// A bit mask for DISABLING specific indexes
-        /// </summary>
-        public DbMaskIndex DatabaseMaskInverted { get; set; }
 
         /// <summary>
         /// When true, only a single result will ever be returned.
@@ -255,16 +217,27 @@ namespace SauceNaoWrapper
             IgnoreRatelimits = false;
         }
 
-        public async Task<KeyValuePair<string, List<SauceResult>>> GetResultAsync(string sauceUrl, int results = 0)
+        public async Task<KeyValuePair<string, SauceResult[]>> GetResultAsync(string sauceUrl, int results = 0)
         {
             if(!(Uri.TryCreate(sauceUrl, UriKind.Absolute, out Uri uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)))
-                return new KeyValuePair<string, List<SauceResult>>("Url supplied was not valid.", new List<SauceResult>());
+                return new KeyValuePair<string, SauceResult[]>("Url supplied was not valid.", new SauceResult[0]);
 
-            if (!AllowedFileTypes.Any(x => x == Path.GetExtension(sauceUrl)))
-                return new KeyValuePair<string, List<SauceResult>>("File provided was not of a valid format.", new List<SauceResult>());
+            if (AllowedFileTypes.All(x => x != Path.GetExtension(sauceUrl)))
+                return new KeyValuePair<string, SauceResult[]>("File provided was not of a valid format.", new SauceResult[0]);
 
             if (results == 0)
                 results = DefaultResultCount;
+
+            if (!IgnoreRatelimits)
+            {
+                if (ShortTermRateLimiter.IsLimited())
+                    return new KeyValuePair<string, SauceResult[]>
+                        ($"You are being sort term rate limited. Check again after {ShortTermRateLimiter.CycleLength.Seconds} seconds.", new SauceResult[0]);
+
+                if (LongTermRateLimiter.IsLimited())
+                    return new KeyValuePair<string, SauceResult[]>
+                        ($"You are being long term rate limited. Check again after {LongTermRateLimiter.CycleLength.Hours} hours.", new SauceResult[0]);
+            }
 
             using (HttpClient client = new HttpClient())
             {
@@ -275,12 +248,12 @@ namespace SauceNaoWrapper
                     { new StringContent(results.ToString()), "numres" },
                     { new StringContent(this.TestMode ? "1" : "0"), "testmode" },
                     { new StringContent(sauceUrl), "url" },
+                    { new StringContent("999"), "db" },
                 });
-
                 client.Dispose();
 
                 if (response.StatusCode != System.Net.HttpStatusCode.OK)
-                    return new KeyValuePair<string, List<SauceResult>>("Response was not 200", new List<SauceResult>());
+                    return new KeyValuePair<string, SauceResult[]>("Response was not 200", new SauceResult[0]);
                 // TODO: Actually do proper error handling
 
                 JsonValue jsonString = JsonValue.Parse(await response.Content.ReadAsStringAsync());
@@ -297,13 +270,15 @@ namespace SauceNaoWrapper
                 }
 
                 string json = jsonArray.ToString();
-                json = json.Insert(json.Length - 1, "}").Insert(0, "{");
-                using (var stream = new MemoryStream(Encoding.Default.GetBytes(json)))
+                json = json.Insert(json.Length - 1, "}").Insert(0, "{\"results\":");
+                using (var stream = JsonReaderWriterFactory.CreateJsonReader(Encoding.UTF8.GetBytes(json), XmlDictionaryReaderQuotas.Max))
                 {
-                    var serializer = new DataContractJsonSerializer(typeof(SauceResult));
-                    List<SauceResult> result = serializer.ReadObject(stream) as List<SauceResult>;
+                    var serializer = new DataContractJsonSerializer(typeof(SauceResultList));
+                    SauceResultList result = serializer.ReadObject(stream) as SauceResultList;
                     stream.Dispose();
-                    return new KeyValuePair<string, List<SauceResult>>("Success.", result);
+                    if (result is null)
+                        return new KeyValuePair<string, SauceResult[]>("Error parsing results.", new SauceResult[0]);
+                    return new KeyValuePair<string, SauceResult[]>("Success.", result.Results);
                 }
             }
         }
