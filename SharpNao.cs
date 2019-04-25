@@ -307,10 +307,5 @@ namespace SauceNaoWrapper
                 }
             }
         }
-
-        private static JsonValue GetJsonArray(JsonObject jsonObject)
-        {
-            return JsonArray.Parse(jsonObject["results"]);
-        }
     }
 }
