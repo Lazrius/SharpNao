@@ -9,12 +9,19 @@ using System.Threading.Tasks;
 using System.Json;
 using System.Text;
 using System.Runtime.Serialization.Json;
+using System.Text.RegularExpressions;
 using System.Xml;
 
-namespace SauceNaoWrapper
+namespace Laz.Api
 {
     public class SharpNao
     {
+        /// <summary>Convert a word that is formatted in pascal case to have splits (by space) at each upper case letter.</summary>
+        private static string SplitPascalCase(string convert)
+        {
+            return Regex.Replace(Regex.Replace(convert, @"(\P{Ll})(\P{Ll}\p{Ll})", "$1 $2"), @"(\p{Ll})(\P{Ll})", "$1 $2");
+        }
+
         /// <summary>
         /// An enumeration of values mapped to the explicitness rating of an image.
         /// </summary>
@@ -41,6 +48,37 @@ namespace SauceNaoWrapper
             XML = 1,
             // Only one that works at the moment
             Json = 2
+        }
+
+        public enum SiteIndex
+        {
+            DoujinshiMangaLexicon = 3,
+            Pixiv = 5,
+            PixivArchive = 6,
+            NicoNicoSeiga = 8,
+            Danbooru = 9,
+            Drawr = 10,
+            Nijie = 11,
+            Yandere = 12,
+            OpeningsMoe = 13,
+            FAKKU = 16,
+            nHentai = 18,
+            TwoDMarket = 19,
+            MediBang = 20,
+            AniDb = 21,
+            IMDB = 23,
+            Gelbooru = 25,
+            Konachan = 26,
+            SankakuChannel = 27,
+            AnimePictures = 28,
+            e621 = 29,
+            IdolComplex = 30,
+            BcyNetIllust = 31,
+            BcyNetCosplay = 32,
+            PortalGraphics = 33,
+            DeviantArt = 34,
+            Pawoo = 35,
+            MangaUpdates = 36,
         }
 
         public class RateLimiter
@@ -97,19 +135,19 @@ namespace SauceNaoWrapper
         }
 
         [DataContract]
-        public class SauceResult
+        public class SourceResult
         {
             /// <summary>
             /// The url(s) where the source is from. Multiple will be returned if the exact same image is found in multiple places
             /// </summary>
             [DataMember(Name = "ext_urls")]
-            public string[] Url { get; internal set; }
+            public string[] Url { get; internal set; }           
 
             /// <summary>
             /// The search index of the image
             /// </summary>
             [DataMember(Name = "index_id")]
-            public int Index { get; internal set; }
+            public SiteIndex Index { get; internal set; }
 
             /// <summary>
             /// How similar is the image to the one provided (Percentage)?
@@ -124,6 +162,12 @@ namespace SauceNaoWrapper
             public string Thumbnail { get; internal set; }
 
             /// <summary>
+            /// The name of the website it came from
+            /// </summary>
+            [IgnoreDataMember]
+            public string WebsiteName { get; internal set; }
+
+            /// <summary>
             /// How explicit is the image?
             /// </summary>
             [IgnoreDataMember]
@@ -131,10 +175,10 @@ namespace SauceNaoWrapper
         }
 
         [DataContract]
-        internal class SauceResultList
+        internal class SourceResultList
         {
             [DataMember(Name = "results")]
-            internal SauceResult[] Results { get; set; }
+            internal SourceResult[] Results { get; set; }
         }
 
         /// <summary>
@@ -177,12 +221,14 @@ namespace SauceNaoWrapper
         public bool TestMode { get; set; }
 
         /// <summary>
-        /// When true, an explicitness rating will be returned, gauging how lewd the image is.
+        /// When true, an explicitness rating will be returned. If false, everything will be set to unknown.
         /// </summary>
         public bool ReturnRatings { get; set; }
 
         /// <summary>
-        /// When true, questionable and nsfw results will be ignored from searchs.
+        /// When true, questionable and nsfw results will be ignored from searchs. The same amount of results will still be returned
+        /// when the search is conducted, but explicit results will be given a value of null.
+        /// If you requested six results and all were explicit with this setting active, you would get an array of six null values.
         /// </summary>
         public bool PreventExplicitResults { get; set; }
 
@@ -217,13 +263,19 @@ namespace SauceNaoWrapper
             IgnoreRatelimits = false;
         }
 
-        public async Task<KeyValuePair<string, SauceResult[]>> GetResultAsync(string sauceUrl, int results = 0)
+        /// <summary>
+        /// Get the source of an image.
+        /// </summary>
+        /// <param name="sauceUrl">The url of the image.</param>
+        /// <param name="results">An optional override for the amount of results to fetch. If 0, it will use the default value.</param>
+        /// <returns></returns>
+        public async Task<KeyValuePair<string, SourceResult[]>> GetResultAsync(string sauceUrl, int results = 0)
         {
             if(!(Uri.TryCreate(sauceUrl, UriKind.Absolute, out Uri uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)))
-                return new KeyValuePair<string, SauceResult[]>("Url supplied was not valid.", new SauceResult[0]);
+                return new KeyValuePair<string, SourceResult[]>("Url supplied was not valid.", new SourceResult[0]);
 
             if (AllowedFileTypes.All(x => x != Path.GetExtension(sauceUrl)))
-                return new KeyValuePair<string, SauceResult[]>("File provided was not of a valid format.", new SauceResult[0]);
+                return new KeyValuePair<string, SourceResult[]>("File provided was not of a valid format.", new SourceResult[0]);
 
             if (results == 0)
                 results = DefaultResultCount;
@@ -231,56 +283,145 @@ namespace SauceNaoWrapper
             if (!IgnoreRatelimits)
             {
                 if (ShortTermRateLimiter.IsLimited())
-                    return new KeyValuePair<string, SauceResult[]>
-                        ($"You are being sort term rate limited. Check again after {ShortTermRateLimiter.CycleLength.Seconds} seconds.", new SauceResult[0]);
+                    return new KeyValuePair<string, SourceResult[]>
+                        ($"You are being sort term rate limited. Check again after {ShortTermRateLimiter.CycleLength.Seconds} seconds.", new SourceResult[0]);
 
                 if (LongTermRateLimiter.IsLimited())
-                    return new KeyValuePair<string, SauceResult[]>
-                        ($"You are being long term rate limited. Check again after {LongTermRateLimiter.CycleLength.Hours} hours.", new SauceResult[0]);
+                    return new KeyValuePair<string, SourceResult[]>
+                        ($"You are being long term rate limited. Check again after {LongTermRateLimiter.CycleLength.Hours} hours.", new SourceResult[0]);
             }
 
             using (HttpClient client = new HttpClient())
             {
                 HttpResponseMessage response = await client.PostAsync(ApiUrl, new MultipartFormDataContent
                 {
-                    { new StringContent(this.ApiKey), "api_key" },
-                    { new StringContent(((int)this.DefaultResponseType).ToString()), "output_type" },
-                    { new StringContent(results.ToString()), "numres" },
-                    { new StringContent(this.TestMode ? "1" : "0"), "testmode" },
-                    { new StringContent(sauceUrl), "url" },
-                    { new StringContent("999"), "db" },
+                    {new StringContent(this.ApiKey), "api_key"},
+                    {new StringContent(((int) this.DefaultResponseType).ToString()), "output_type"},
+                    {new StringContent(results.ToString()), "numres"},
+                    {new StringContent(this.TestMode ? "1" : "0"), "testmode"},
+                    {new StringContent(sauceUrl), "url"},
+                    {new StringContent("999"), "db"},
                 });
-                client.Dispose();
 
                 if (response.StatusCode != System.Net.HttpStatusCode.OK)
-                    return new KeyValuePair<string, SauceResult[]>("Response was not 200", new SauceResult[0]);
+                    return new KeyValuePair<string, SourceResult[]>("Response was not 200", new SourceResult[0]);
                 // TODO: Actually do proper error handling
 
                 JsonValue jsonString = JsonValue.Parse(await response.Content.ReadAsStringAsync());
-                JsonObject jsonObject = jsonString as JsonObject;
-                JsonValue jsonArray = jsonObject["results"];
-                for (int i = 0; i < jsonArray.Count; i++)
+                if (jsonString is JsonObject jsonObject)
                 {
-                    JsonValue header = jsonArray[i]["header"];
-                    JsonValue data = jsonArray[i]["data"];
-                    string obj = header.ToString();
-                    obj = obj.Remove(obj.Length - 1);
-                    obj += data.ToString().Remove(0, 1).Insert(0, ",");
-                    jsonArray[i] = JsonValue.Parse(obj);
+                    JsonValue jsonArray = jsonObject["results"];
+                    for (int i = 0; i < jsonArray.Count; i++)
+                    {
+                        JsonValue header = jsonArray[i]["header"];
+                        JsonValue data = jsonArray[i]["data"];
+                        string obj = header.ToString();
+                        obj = obj.Remove(obj.Length - 1);
+                        obj += data.ToString().Remove(0, 1).Insert(0, ",");
+                        jsonArray[i] = JsonValue.Parse(obj);
+                    }
+
+                    string json = jsonArray.ToString();
+                    json = json.Insert(json.Length - 1, "}").Insert(0, "{\"results\":");
+                    using (var stream = JsonReaderWriterFactory.CreateJsonReader(Encoding.UTF8.GetBytes(json), XmlDictionaryReaderQuotas.Max))
+                    {
+                        var serializer = new DataContractJsonSerializer(typeof(SourceResultList));
+                        SourceResultList result = serializer.ReadObject(stream) as SourceResultList;
+                        stream.Dispose();
+                        if (result is null)
+                            return new KeyValuePair<string, SourceResult[]>("Error parsing results.", new SourceResult[0]);
+
+                        for (int i = 0; i < result.Results.Length; i++)
+                        {
+                            result.Results[i].WebsiteName = SplitPascalCase(result.Results[i].Index.ToString());
+                            if (ReturnRatings)
+                                result.Results[i] = await GetRating(client, result.Results[i], this.TreatUnknownAsQuestionable, this.PreventExplicitResults);
+                            else
+                                result.Results[i].Rating = SourceRating.Unknown;
+                        }
+
+                        return new KeyValuePair<string, SourceResult[]>("Success.", result.Results);
+                    }
                 }
 
-                string json = jsonArray.ToString();
-                json = json.Insert(json.Length - 1, "}").Insert(0, "{\"results\":");
-                using (var stream = JsonReaderWriterFactory.CreateJsonReader(Encoding.UTF8.GetBytes(json), XmlDictionaryReaderQuotas.Max))
-                {
-                    var serializer = new DataContractJsonSerializer(typeof(SauceResultList));
-                    SauceResultList result = serializer.ReadObject(stream) as SauceResultList;
-                    stream.Dispose();
-                    if (result is null)
-                        return new KeyValuePair<string, SauceResult[]>("Error parsing results.", new SauceResult[0]);
-                    return new KeyValuePair<string, SauceResult[]>("Success.", result.Results);
-                }
+                else
+                    return new KeyValuePair<string, SourceResult[]>("Error parsing results.", new SourceResult[0]);
             }
+        }
+
+        private async Task<SourceResult> GetRating(HttpClient client, SourceResult result, bool unknownIsQuestionable, bool ignoreExplicit)
+        {
+            async Task<Match> WebRequest(string url, string pattern)
+            {
+                Regex regex = new Regex(pattern, RegexOptions.IgnoreCase);
+                HttpResponseMessage res = await client.GetAsync(url);
+                Match webMatch = regex.Match((await res.Content.ReadAsStringAsync()));
+                return webMatch;
+            }
+
+            // TODO: Test how effective the regex is without the backup urls
+            Match match = null;
+            switch (result.Index)
+            {
+                case SiteIndex.DoujinshiMangaLexicon:
+                    match = await WebRequest(result.Url[0], @"<td>.*?<b>Adult:<\/b><\/td><td>(.*)<\/td>");
+                    if (match.Success)
+                        result.Rating = match.Groups[1].Value == "Yes" ? SourceRating.Nsfw : SourceRating.Safe;
+                    else result.Rating = SourceRating.Unknown;
+                    break;
+
+                case SiteIndex.Pixiv:
+                case SiteIndex.PixivArchive:
+                    match = await WebRequest(result.Url[0], @"<div class=""introduction-modal""><p class=""title"">(.*?)<\/p>");
+                    if (!match.Success) result.Rating = SourceRating.Safe;
+                    else result.Rating = match.Groups[1].Value.ToLowerInvariant().Contains("r-18") ? SourceRating.Nsfw : SourceRating.Safe;
+                    break;
+
+                case SiteIndex.Gelbooru:
+                case SiteIndex.Danbooru:
+                case SiteIndex.SankakuChannel:
+                case SiteIndex.IdolComplex:
+                    match = await WebRequest(result.Url[0], @"<li>Rating: (.*?)<\/li>");
+                    if (!match.Success) result.Rating = SourceRating.Unknown;
+                    else result.Rating = (SourceRating)Array.IndexOf(new[] { null, "Safe", "Questionable", "Explicit" }, match.Groups[1].Value);
+                    break;
+
+                case SiteIndex.Yandere:
+                case SiteIndex.Konachan:
+                    match = await WebRequest(result.Url[0], @"<li>Rating: (.*?) <span class="".*?""><\/span><\/li>");
+                    if (!match.Success) result.Rating = SourceRating.Unknown;
+                    else result.Rating = (SourceRating)Array.IndexOf(new[] { null, "Safe", "Questionable", "Explicit" }, match.Groups[1].Value);
+                    break;
+
+                case SiteIndex.e621:
+                    match = await WebRequest(result.Url[0], @"<li>Rating: <span class="".*?"">(.*)<\/span><\/li>");
+                    if (!match.Success) result.Rating = SourceRating.Unknown;
+                    else result.Rating = (SourceRating)Array.IndexOf(new[] { null, "Safe", "Questionable", "Explicit" }, match.Groups[1].Value);
+                    break;
+
+                case SiteIndex.FAKKU:
+                case SiteIndex.TwoDMarket:
+                case SiteIndex.nHentai:
+                    result.Rating = SourceRating.Nsfw;
+                    break;
+
+                case SiteIndex.DeviantArt:
+                    match = await WebRequest(result.Url[0], @"<h1>Mature Content<\/h1>");
+                    result.Rating = match.Success ? SourceRating.Nsfw : SourceRating.Safe;
+                    break;
+
+                default:
+                    result.Rating = SourceRating.Unknown;
+                    break;
+            }
+
+            if (unknownIsQuestionable && result.Rating is SourceRating.Unknown)
+                result.Rating = SourceRating.Questionable;
+
+            if (ignoreExplicit && (result.Rating is SourceRating.Questionable || result.Rating is SourceRating.Nsfw))
+                return null;
+
+            return result;
         }
     }
 }
