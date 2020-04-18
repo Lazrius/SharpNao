@@ -246,7 +246,7 @@ namespace Laz.Api
         /// <summary>
         /// An array of the allowed file types. We check against these before sending the request.
         /// </summary>
-        private string[] AllowedFileTypes { get; } = new[] {".jpg", ".jpeg", ".gif", ".bmp", ".png"};
+        private string[] AllowedFileTypes { get; } = new[] {".jpg", ".jpeg", ".gif", ".bmp", ".png", ".webp"};
 
         /// <summary></summary>
         /// <param name="apiKey">Your SauceNao Api Key</param>
