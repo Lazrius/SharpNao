@@ -1,5 +1,4 @@
-﻿
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -274,8 +273,16 @@ namespace Laz.Api
             if(!(Uri.TryCreate(sauceUrl, UriKind.Absolute, out Uri uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)))
                 return new KeyValuePair<string, SourceResult[]>("Url supplied was not valid.", new SourceResult[0]);
 
-            if (AllowedFileTypes.All(x => x != Path.GetExtension(sauceUrl)))
-                return new KeyValuePair<string, SourceResult[]>("File provided was not of a valid format.", new SourceResult[0]);
+            {
+                string extension = Path.GetExtension(sauceUrl);
+
+                int index = extension.IndexOf('?');
+                if(index > 0)
+                    extension = extension.Substring(0, index);
+
+                if (AllowedFileTypes.All(x => x != extension))
+                    return new KeyValuePair<string, SourceResult[]>("File provided was not of a valid format.", new SourceResult[0]);
+            }
 
             if (results == 0)
                 results = DefaultResultCount;
