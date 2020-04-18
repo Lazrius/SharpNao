@@ -57,7 +57,7 @@ wrapper.LongTermRateLimiter = new RateLimiter(imagesPerCycle, new TimeSpan(hours
 
 
 ## Notes
-- Only .png, .jpeg, .jpg, .bmp, and .gif images are supported
+- Only .png, .jpeg, .jpg, .bmp, .gif and .webp images are supported
 - DefaultReponseType exists in case the SauceNao developer(s) ever implement the XML output type (highly doubtful).
   Setting it to normal will just return a normal html search. The wrapper is not currently setup to deal with this (potentially in the future).
   
